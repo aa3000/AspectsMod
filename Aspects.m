@@ -104,6 +104,13 @@ static NSString *const AspectsMessagePrefix = @"aspects_";
     return aspect_add((id)self, selector, options, block, error);
 }
 
++ (id<AspectToken>)aspect_hookClassSelector:(SEL)selector
+                                withOptions:(AspectOptions)options
+                                 usingBlock:(id)block
+                                      error:(NSError **)error {
+    return aspect_add(object_getClass(self.class), selector, options, block, error);
+}
+
 /// @return A token which allows to later deregister the aspect.
 - (id<AspectToken>)aspect_hookSelector:(SEL)selector
                       withOptions:(AspectOptions)options
@@ -444,9 +451,23 @@ static void _aspect_modifySwizzledClasses(void (^block)(NSMutableSet *swizzledCl
     }
 }
 
+// Add By Liam , fix aspects class method and instance method on the same class
+
+static NSString *aspect_getSwizzledClassName(Class klass)
+{
+    NSString *className = NSStringFromClass(klass);
+    if (class_isMetaClass(klass))
+    {
+        className = [className stringByAppendingString:@"_metaClass"];
+    }
+    
+    return className;
+}
+
 static Class aspect_swizzleClassInPlace(Class klass) {
     NSCParameterAssert(klass);
-    NSString *className = NSStringFromClass(klass);
+    
+    NSString *className = aspect_getSwizzledClassName(klass);
 
     _aspect_modifySwizzledClasses(^(NSMutableSet *swizzledClasses) {
         if (![swizzledClasses containsObject:className]) {
@@ -459,7 +480,8 @@ static Class aspect_swizzleClassInPlace(Class klass) {
 
 static void aspect_undoSwizzleClassInPlace(Class klass) {
     NSCParameterAssert(klass);
-    NSString *className = NSStringFromClass(klass);
+    
+    NSString *className = aspect_getSwizzledClassName(klass);
 
     _aspect_modifySwizzledClasses(^(NSMutableSet *swizzledClasses) {
         if ([swizzledClasses containsObject:className]) {
@@ -632,60 +654,60 @@ static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, Aspec
         return NO;
     }
 
-//#if TARGET_IPHONE_SIMULATOR
-//    
-//    // Search for the current class and the class hierarchy IF we are modifying a class object
-//    if (class_isMetaClass(object_getClass(self))) {
-//        Class klass = [self class];
-//        NSMutableDictionary *swizzledClassesDict = aspect_getSwizzledClassesDict();
-//        Class currentClass = [self class];
-//
-//        AspectTracker *tracker = swizzledClassesDict[currentClass];
-//        if ([tracker subclassHasHookedSelectorName:selectorName]) {
-//            NSSet *subclassTracker = [tracker subclassTrackersHookingSelectorName:selectorName];
-//            NSSet *subclassNames = [subclassTracker valueForKey:@"trackedClassName"];
-//            NSString *errorDescription = [NSString stringWithFormat:@"Error: %@ already hooked subclasses: %@. A method can only be hooked once per class hierarchy.", selectorName, subclassNames];
-//            AspectError(AspectErrorSelectorAlreadyHookedInClassHierarchy, errorDescription);
-//            return NO;
-//        }
-//
-//        do {
-//            tracker = swizzledClassesDict[currentClass];
-//            if ([tracker.selectorNames containsObject:selectorName]) {
-//                if (klass == currentClass) {
-//                    // Already modified and topmost!
-//                    return YES;
-//                }
-//                NSString *errorDescription = [NSString stringWithFormat:@"Error: %@ already hooked in %@. A method can only be hooked once per class hierarchy.", selectorName, NSStringFromClass(currentClass)];
-//                AspectError(AspectErrorSelectorAlreadyHookedInClassHierarchy, errorDescription);
-//                return NO;
-//            }
-//        } while ((currentClass = class_getSuperclass(currentClass)));
-//
-//        // Add the selector as being modified.
-//        currentClass = klass;
-//        AspectTracker *subclassTracker = nil;
-//        do {
-//            tracker = swizzledClassesDict[currentClass];
-//            if (!tracker) {
-//                tracker = [[AspectTracker alloc] initWithTrackedClass:currentClass];
-//                swizzledClassesDict[(id<NSCopying>)currentClass] = tracker;
-//            }
-//            if (subclassTracker) {
-//                [tracker addSubclassTracker:subclassTracker hookingSelectorName:selectorName];
-//            } else {
-//                [tracker.selectorNames addObject:selectorName];
-//            }
-//
-//            // All superclasses get marked as having a subclass that is modified.
-//            subclassTracker = tracker;
-//        }while ((currentClass = class_getSuperclass(currentClass)));
-//	} else {
-//		return YES;
-//	}
-//    
-//#endif
-//
+#if TARGET_IPHONE_SIMULATOR
+    
+    // Search for the current class and the class hierarchy IF we are modifying a class object
+    if (class_isMetaClass(object_getClass(self))) {
+        Class klass = [self class];
+        NSMutableDictionary *swizzledClassesDict = aspect_getSwizzledClassesDict();
+        Class currentClass = [self class];
+
+        AspectTracker *tracker = swizzledClassesDict[currentClass];
+        if ([tracker subclassHasHookedSelectorName:selectorName]) {
+            NSSet *subclassTracker = [tracker subclassTrackersHookingSelectorName:selectorName];
+            NSSet *subclassNames = [subclassTracker valueForKey:@"trackedClassName"];
+            NSString *errorDescription = [NSString stringWithFormat:@"Error: %@ already hooked subclasses: %@. A method can only be hooked once per class hierarchy.", selectorName, subclassNames];
+            AspectError(AspectErrorSelectorAlreadyHookedInClassHierarchy, errorDescription);
+            return NO;
+        }
+
+        do {
+            tracker = swizzledClassesDict[currentClass];
+            if ([tracker.selectorNames containsObject:selectorName]) {
+                if (klass == currentClass) {
+                    // Already modified and topmost!
+                    return YES;
+                }
+                NSString *errorDescription = [NSString stringWithFormat:@"Error: %@ already hooked in %@. A method can only be hooked once per class hierarchy.", selectorName, NSStringFromClass(currentClass)];
+                AspectError(AspectErrorSelectorAlreadyHookedInClassHierarchy, errorDescription);
+                return NO;
+            }
+        } while ((currentClass = class_getSuperclass(currentClass)));
+
+        // Add the selector as being modified.
+        currentClass = klass;
+        AspectTracker *subclassTracker = nil;
+        do {
+            tracker = swizzledClassesDict[currentClass];
+            if (!tracker) {
+                tracker = [[AspectTracker alloc] initWithTrackedClass:currentClass];
+                swizzledClassesDict[(id<NSCopying>)currentClass] = tracker;
+            }
+            if (subclassTracker) {
+                [tracker addSubclassTracker:subclassTracker hookingSelectorName:selectorName];
+            } else {
+                [tracker.selectorNames addObject:selectorName];
+            }
+
+            // All superclasses get marked as having a subclass that is modified.
+            subclassTracker = tracker;
+        }while ((currentClass = class_getSuperclass(currentClass)));
+	} else {
+		return YES;
+	}
+    
+#endif
+
     return YES;
 }
 
